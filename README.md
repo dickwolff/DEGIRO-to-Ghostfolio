@@ -2,11 +2,15 @@
 
 This tool allows you to convert a [DEGIRO](https://www.degiro.nl) transaction export (CSV) to an import file that can be read by [Ghostfolio](https://github.com/ghostfolio/ghostfolio/). 
 
+
 **NOTICE: It is recommended to only use this when you have a local instance of Ghostfolio, so you don't spam the online service hosted by Ghostfolio!**
 
 ## How to use
 
-Go to DEGIRO and create an export file (via Inbox > Account Overview). Choose the period from which you wish to export your history and click download.
+Go to DEGIRO and create an export file (via Inbox > Account Overview, see image below). Choose the period from which you wish to export your history and click download.
+
+![image](https://user-images.githubusercontent.com/5620002/208771980-6eb46aeb-5ea7-44dc-88b4-528d8fc1a264.png)
+
 
 Next, clone the repo to your local machine and open with your editor of choice (e.g. Visual Studio Code).
 
