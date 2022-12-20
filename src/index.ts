@@ -63,7 +63,7 @@ parse(csvFile, {
 
     // Start progress bar.
     const progress = new cliProgesss.SingleBar({}, cliProgesss.Presets.shades_classic);
-    progress.start(records.length, 0);
+    progress.start(records.length - 1, 0);
 
     for (let idx = 0; idx < records.length; idx++) {
         const record = records[idx];
