@@ -6,7 +6,7 @@ This tool allows you to convert a [DEGIRO](https://www.degiro.nl) transaction ex
 
 ## How to use
 
-Go to DEGIRO and create an export file (via Inbox > Transactions). Choose the period from which you wish to export your history and click download.
+Go to DEGIRO and create an export file (via Inbox > Account Overview). Choose the period from which you wish to export your history and click download.
 
 Next, clone the repo to your local machine and open with your editor of choice (e.g. Visual Studio Code).
 
