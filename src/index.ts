@@ -6,6 +6,7 @@ import fetch from "cross-fetch";
 import { parse } from "csv-parse";
 import { DeGiroRecord } from "../models/degiroRecord";
 import { GhostfolioOrderType } from "../models/ghostfolioOrderType";
+import cliProgesss from "cli-progress";
 
 require("dotenv").config();
 
@@ -60,10 +61,14 @@ parse(csvFile, {
     const bearerResponse = await fetch(`${process.env.GHOSTFOLIO_API_URL}/api/v1/auth/anonymous/${process.env.GHOSTFOLIO_SECRET}`);
     const bearer = await bearerResponse.json();
 
+    // Start progress bar.
+    const progress = new cliProgesss.SingleBar({}, cliProgesss.Presets.shades_classic);
+    progress.start(records.length, 0);
+
     for (let idx = 0; idx < records.length; idx++) {
         const record = records[idx];
+        progress.update(idx);
 
-        console.log(`\tProcessing ${idx + 1} of ${records.length}`);
         const description = record.description.toLocaleLowerCase();
 
         // Skip some records which contains one of the words below.
@@ -219,6 +224,8 @@ parse(csvFile, {
             symbol: tickers.items.length > 0 ? tickers.items[0].symbol : ""
         });
     }
+
+    progress.stop();
 
     // Only export when no error has occured.
     if (!errorExport) {
