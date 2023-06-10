@@ -100,7 +100,8 @@ parse(csvFile, {
         const tickers = await tickerResponse.json();
 
         let orderType: GhostfolioOrderType;
-        let fees, unitPrice, numberShares = 0;
+        let fees, unitPrice, numberShares;
+        fees = unitPrice = numberShares = 0;
         let marker = "";
 
         // Dividend tax references to the previous record. This is always a "dividend" record.
@@ -122,6 +123,7 @@ parse(csvFile, {
 
         // Retrieve relevant data for a dividend record.
         if (description.indexOf("dividend") > -1) {
+            numberShares = 1;
             orderType = GhostfolioOrderType.dividend;
             unitPrice = Math.abs(parseFloat(record.amount.replace(',', '.')));
         }
