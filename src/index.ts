@@ -74,13 +74,12 @@ parse(csvFile, {
         // Skip some records which contains one of the words below.
         if (description === '' ||
             description.indexOf("ideal") > -1 ||
-            description.indexOf("derden") > -1 ||
             description.indexOf("flatex") > -1 ||
             description.indexOf("cash sweep") > -1 ||
             description.indexOf("withdrawal") > -1) {
             continue;
         }
-
+        
         // TODO: Is is possible to add currency? So VWRL.AS is retrieved for IE00B3RBWM25 instead of VWRL.L.
 
         // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
@@ -137,20 +136,16 @@ parse(csvFile, {
             numberShares = parseFloat(verkoopMatch[2]);
             unitPrice = Math.abs(parseFloat(record.amount.replace(',', '.')));
 
-            // For a Sale record, the preceding records should be "debitering" and "creditering", in that order. This means the sale had a transaction fee associated.
-            // However only the "debitering" record is of relevance for the transaction. So the "creditering" record can be deleted.
-            if (exportFile.activities[exportFile.activities.length - 2].comment === "debitering") {
+            // For a Sale record, the preceding record should be "transactiekosten". This means the sale had a transaction fee associated.
+            if (exportFile.activities[exportFile.activities.length - 1].comment === "transactiekosten") {
 
-                exportFile.activities[exportFile.activities.length - 2].type = orderType;
-                exportFile.activities[exportFile.activities.length - 2].symbol = tickers.items[0].symbol;
-                exportFile.activities[exportFile.activities.length - 2].quantity = numberShares;
-                exportFile.activities[exportFile.activities.length - 2].unitPrice = unitPrice;
-                exportFile.activities[exportFile.activities.length - 2].currency = record.currency;
-                exportFile.activities[exportFile.activities.length - 2].comment = "";
-
-                // Remove the "creditering" record.
-                exportFile.activities.splice(exportFile.activities.length - 1, 1);
-
+                exportFile.activities[exportFile.activities.length - 1].type = orderType;
+                exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
+                exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
+                exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
+                exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+                exportFile.activities[exportFile.activities.length - 1].comment = "";
+                
                 continue;
             }
         }
@@ -164,44 +159,35 @@ parse(csvFile, {
             numberShares = parseFloat(koopMatch[2]);
             unitPrice = Math.abs(parseFloat(record.amount.replace(',', '.')));
 
-            // For a Sale record, the preceding records should be "creditering" and "debitering", in that order. This means the buy had a transaction fee associated.
-            // However only the "creditering" record is of relevance for the transaction. So the "debitering" record can be deleted.
-            if (exportFile.activities[exportFile.activities.length - 2].comment === "creditering") {
+            // For a Buy record, the preceding record should be "transactiekosten". This means the buy had a transaction fee associated.
+            if (exportFile.activities[exportFile.activities.length - 1].comment === "transactiekosten") {
 
                 // Set the buy transaction data.
-                exportFile.activities[exportFile.activities.length - 2].type = orderType;
-                exportFile.activities[exportFile.activities.length - 2].symbol = tickers.items[0].symbol;
-                exportFile.activities[exportFile.activities.length - 2].quantity = numberShares;
-                exportFile.activities[exportFile.activities.length - 2].unitPrice = unitPrice;
-                exportFile.activities[exportFile.activities.length - 2].currency = record.currency;
-                exportFile.activities[exportFile.activities.length - 2].comment = "";
-
-                // Remove the "debitering" record.
-                exportFile.activities.splice(exportFile.activities.length - 1, 1);
+                exportFile.activities[exportFile.activities.length - 1].type = orderType;
+                exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
+                exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
+                exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
+                exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+                exportFile.activities[exportFile.activities.length - 1].comment = "";
 
                 continue;
 
             } else {
 
                 // It is a buy transaction without fees (e.g. within Kernselectie).
+                // This is only for support of older transactions before June 1st 2023, since the Kernselectie is no longer without fees.
                 marker = "";
             }
         }
 
-        // When ISIN is given, check for creditering/debitering records.
-        // For this record the "FX" record should be retrieved. This contains the transaction fee in local currency.
+        // When ISIN is given, check for Transactiekosten record.
+        // For this record the "Amount" record should be retrieved. This contains the transaction fee in local currency.
         if (record.isin.length > 0) {
 
-            const creditMatch = description.match(/(valuta creditering)/);
+            const creditMatch = description.match(/(transactiekosten)/);
             if (creditMatch) {
-                fees = Math.abs(parseFloat(record.fx.replace(',', '.')));
-                marker = "creditering";
-            }
-
-            const debitMatch = description.match(/(valuta debitering)/);
-            if (debitMatch) {
-                fees = Math.abs(parseFloat(record.fx.replace(',', '.')));
-                marker = "debitering";
+                fees = Math.abs(parseFloat(record.amount.replace(',', '.')));
+                marker = "transactiekosten";
             }
 
         } else {
