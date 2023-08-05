@@ -79,7 +79,15 @@ parse(csvFile, {
             description.indexOf("withdrawal") > -1) {
             continue;
         }
-        
+
+        // Skip all remaining records where:
+        // - The description does not contain the text 'dividend', and
+        // - The description does not contain an '@' (present on buy/sell records), and
+        // - The description does not contain an '/' (present on buy/sell fee records).
+        if (description.indexOf("dividend") === -1 && description.indexOf("\@") === -1 && description.indexOf("\/") === -1) {
+            continue;
+        }
+
         // TODO: Is is possible to add currency? So VWRL.AS is retrieved for IE00B3RBWM25 instead of VWRL.L.
 
         // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
@@ -148,7 +156,7 @@ parse(csvFile, {
                 exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
                 exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
                 exportFile.activities[exportFile.activities.length - 1].comment = "";
-                
+
                 continue;
             }
         }
