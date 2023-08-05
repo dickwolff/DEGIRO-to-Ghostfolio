@@ -167,8 +167,11 @@ parse(csvFile, {
 
             // Get relevant data.
             orderType = GhostfolioOrderType.buy;
-            numberShares = parseFloat(koopMatch[2]);
-            unitPrice = Math.abs(parseFloat(record.amount.replace(',', '.')));
+            numberShares = parseFloat(koopMatch[2]);            
+            
+            // For a buy record, only the total amount is recorded. So the unit price needs to be calculated.
+            const totalAmount = Math.abs(parseFloat(record.amount.replace(',', '.')));
+            unitPrice = parseFloat((totalAmount / numberShares).toFixed(3));
 
             // For a Buy record, the preceding record should be "transactiekosten". This means the buy had a transaction fee associated.
             if (exportFile.activities[exportFile.activities.length - 1].comment === "transactiekosten") {
