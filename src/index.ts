@@ -76,7 +76,8 @@ parse(csvFile, {
           description.indexOf("ideal") > -1 ||
           description.indexOf("flatex") > -1 ||
           description.indexOf("cash sweep") > -1 ||
-          description.indexOf("withdrawal") > -1) {
+          description.indexOf("withdrawal") > -1 ||
+          description.indexOf("pass-through") > -1) {
         continue;
       }
 
@@ -216,7 +217,7 @@ parse(csvFile, {
         quantity: numberShares,
         type: orderType,
         unitPrice: unitPrice,
-        currency: "",
+        currency: record.currency,
         dataSource: "YAHOO",
         date: date.format("YYYY-MM-DDTHH:mm:ssZ"),
         symbol: tickers.items.length > 0 ? tickers.items[0].symbol : ""
