@@ -1,6 +1,6 @@
 import { GhostfolioExport } from "../models/ghostfolioExport";
 import * as fs from "fs";
-import dayjs from "dayjs"
+import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import fetch from "cross-fetch";
 import { parse } from "csv-parse";
@@ -17,18 +17,18 @@ const inputFile = process.env.INPUT_FILE;
 
 // Generic header mapping from the DEGIRO CSV export.
 const csvHeaders = [
-    "date",
-    "time",
-    "currencyDate",
-    "product",
-    "isin",
-    "description",
-    "fx",
-    "currency",
-    "amount",
-    "col1", // Not relevant column.
-    "col2", // Not relevant column.
-    "orderId"];
+  "date",
+  "time",
+  "currencyDate",
+  "product",
+  "isin",
+  "description",
+  "fx",
+  "currency",
+  "amount",
+  "col1", // Not relevant column.
+  "col2", // Not relevant column.
+  "orderId"];
 
 // Read file contents of the CSV export.
 const csvFile = fs.readFileSync(inputFile, "utf-8");
@@ -40,22 +40,22 @@ parse(csvFile, {
     columns: csvHeaders,
     cast: (columnValue, context) => {
 
-        // Custom mapping below.
+      // Custom mapping below.
 
-        return columnValue;
+      return columnValue;
     }
-}, async (_, records: DeGiroRecord[]) => {
+  }, async (_, records: DeGiroRecord[]) => {
 
     let errorExport = false;
 
     console.log(`Read CSV file ${inputFile}. Start processing..`);
     const exportFile: GhostfolioExport = {
-        meta: {
-            date: new Date(),
-            version: "v0"
-        },
-        activities: []
-    }
+      meta: {
+        date: new Date(),
+        version: "v0"
+      },
+      activities: []
+    };
 
     // Retrieve bearer token for authentication.
     const bearerResponse = await fetch(`${process.env.GHOSTFOLIO_API_URL}/api/v1/auth/anonymous/${process.env.GHOSTFOLIO_SECRET}`);
@@ -66,59 +66,65 @@ parse(csvFile, {
     progress.start(records.length - 1, 0);
 
     for (let idx = 0; idx < records.length; idx++) {
-        const record = records[idx];
-        progress.update(idx);
+      const record = records[idx];
+      progress.update(idx);
 
-        const description = record.description.toLocaleLowerCase();
+      const description = record.description.toLocaleLowerCase();
 
-        // Skip some records which contains one of the words below.
-        if (description === '' ||
-            description.indexOf("ideal") > -1 ||
-            description.indexOf("flatex") > -1 ||
-            description.indexOf("cash sweep") > -1 ||
-            description.indexOf("withdrawal") > -1) {
-            continue;
-        }
+      // Skip some records which contains one of the words below.
+      if (description === "" ||
+          description.indexOf("ideal") > -1 ||
+          description.indexOf("flatex") > -1 ||
+          description.indexOf("cash sweep") > -1 ||
+          description.indexOf("withdrawal") > -1) {
+        continue;
+      }
 
-        // Skip all remaining records where:
-        // - The description does not contain the text 'dividend', and
-        // - The description does not contain an '@' (present on buy/sell records), and
-        // - The description does not contain an '/' (present on buy/sell fee records).
-        if (description.indexOf("dividend") === -1 && description.indexOf("\@") === -1 && description.indexOf("\/") === -1) {
-            continue;
-        }
+      // Skip all remaining records where:
+      // - The description does not contain the text 'dividend', and
+      // - The description does not contain an '@' (present on buy/sell records), and
+      // - The description does not contain an '/' (present on buy/sell fee records).
+      if (description.indexOf("dividend") === -1 && description.indexOf("\@") === -1 && description.indexOf("\/") === -1) {
+        continue;
+      }
 
-        // TODO: Is is possible to add currency? So VWRL.AS is retrieved for IE00B3RBWM25 instead of VWRL.L.
+      // TODO: Is is possible to add currency? So VWRL.AS is retrieved for IE00B3RBWM25 instead of VWRL.L.
+      // Maybe add yahoo-finance2 library that Ghostfolio uses, so I dont need to call Ghostfolio for this.
 
-        // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
-        const tickerUrl = `${process.env.GHOSTFOLIO_API_URL}/api/v1/symbol/lookup?query=${record.isin}`;
-        const tickerResponse = await fetch(tickerUrl, {
-            method: "GET",
-            headers: [["Authorization", `Bearer ${bearer.authToken}`]]
-        });
+      // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
+      const tickerUrl = `${process.env.GHOSTFOLIO_API_URL}/api/v1/symbol/lookup?query=${record.isin}`;
+      const tickerResponse = await fetch(tickerUrl, {
+        method: "GET",
+        headers: [["Authorization", `Bearer ${bearer.authToken}`]]
+      });
 
-        // Check if response was not unauthorized.
-        if (tickerResponse.status === 401) {
-            console.error("Ghostfolio access token is not valid!");
-            errorExport = true;
-            break;
-        }
+      // Check if response was not unauthorized.
+      if (tickerResponse.status === 401) {
+        console.error("Ghostfolio access token is not valid!");
+        errorExport = true;
+        break;
+      }
 
-        const tickers = await tickerResponse.json();
+      const tickers = await tickerResponse.json();
 
-        let orderType: GhostfolioOrderType;
-        let fees, unitPrice, numberShares;
-        fees = unitPrice = numberShares = 0;
-        let marker = "";
+      let orderType: GhostfolioOrderType;
+      let fees, unitPrice, numberShares;
+      fees = unitPrice = numberShares = 0;
+      let marker = "";
+     
+      // Retrieve relevant data for a dividend record.
+      if (description.indexOf("dividend") > -1) {
 
-        // Dividend tax references to the previous record. This is always a "dividend" record.
-        if (description.indexOf("dividendbelasting") > -1) {
-
+        // Retrieve the amount of the record. Check wether this is negative. If so, this is a dividend tax record.
+         // Dividend tax references to the previous record. This is always a "dividend" record.
+        const amountRecord = parseFloat(record.amount.replace(",", "."));
+        if (amountRecord < 0) {
+                    
             // Retrieve the data from this record and place it on the previous processed record.
             // This record should not be added, so it will be skipped after retrieving the required info.
 
-            // Get dividend tax.
-            unitPrice = Math.abs(parseFloat(record.amount.replace(',', '.')));
+            // Get absolute dividend tax amount.
+            unitPrice = Math.abs(amountRecord);
 
             // Set record values.
             exportFile.activities[exportFile.activities.length - 1].fee = unitPrice;
@@ -128,115 +134,104 @@ parse(csvFile, {
             continue;
         }
 
-        // Retrieve relevant data for a dividend record.
-        if (description.indexOf("dividend") > -1) {
-            numberShares = 1;
-            orderType = GhostfolioOrderType.dividend;
-            unitPrice = Math.abs(parseFloat(record.amount.replace(',', '.')));
-        }
+        // This is just a normal dividend record.
+        numberShares = 1;
+        orderType = GhostfolioOrderType.dividend;
+        unitPrice = Math.abs(parseFloat(record.amount.replace(",", ".")));
+      }
 
-        // Check for a Sale record.
-        const verkoopMatch = description.match(/(verkoop ([\d]+))/);
-        if (verkoopMatch) {
+      // Check for a buy/sell record. This can be identified by an '@'.
+      if (description.match(/\@/)) {
+        
+        // Get the amount of shares from the description.
+        const numberSharesFromDescription = description.match(/([\d*\.?\,?\d*]+)/)[0];
+        numberShares = parseFloat(numberSharesFromDescription);
 
-            // Get relevant data.
-            orderType = GhostfolioOrderType.sell;
-            numberShares = parseFloat(verkoopMatch[2]);
+        // For buy/sale records, only the total amount is recorded. So the unit price needs to be calculated.        
+        const totalAmount = parseFloat(record.amount.replace(",", "."));
+        unitPrice = parseFloat((Math.abs(totalAmount) / numberShares).toFixed(3));
 
-            // For a sale record, only the total amount is recorded. So the unit price needs to be calculated.
-            const totalAmount = Math.abs(parseFloat(record.amount.replace(',', '.')));
-            unitPrice = parseFloat((totalAmount / numberShares).toFixed(3));
+        // If amount is negative, so money has been removed, thus it's a buy record.
+        if (totalAmount < 0) {
 
-            // For a Sale record, the preceding record should be "transactiekosten". This means the sale had a transaction fee associated.
-            if (exportFile.activities[exportFile.activities.length - 1].comment === "transactiekosten") {
+          orderType = GhostfolioOrderType.buy;
 
-                exportFile.activities[exportFile.activities.length - 1].type = orderType;
-                exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
-                exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
-                exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
-                exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
-                exportFile.activities[exportFile.activities.length - 1].comment = "";
+          // For a Buy record, the preceding record should be "txfees". This means the buy had a transaction fee associated.
+          if (exportFile.activities[exportFile.activities.length - 1].comment === "txfees") {
 
-                continue;
-            }
-        }
+            // Set the buy transaction data.
+            exportFile.activities[exportFile.activities.length - 1].type = orderType;
+            exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
+            exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
+            exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
+            exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+            exportFile.activities[exportFile.activities.length - 1].comment = "";
 
-        // Check for a Buy record.
-        const koopMatch = description.match(/(koop ([\d]+))/);
-        if (koopMatch) {
-
-            // Get relevant data.
-            orderType = GhostfolioOrderType.buy;
-            numberShares = parseFloat(koopMatch[2]);            
-            
-            // For a buy record, only the total amount is recorded. So the unit price needs to be calculated.
-            const totalAmount = Math.abs(parseFloat(record.amount.replace(',', '.')));
-            unitPrice = parseFloat((totalAmount / numberShares).toFixed(3));
-
-            // For a Buy record, the preceding record should be "transactiekosten". This means the buy had a transaction fee associated.
-            if (exportFile.activities[exportFile.activities.length - 1].comment === "transactiekosten") {
-
-                // Set the buy transaction data.
-                exportFile.activities[exportFile.activities.length - 1].type = orderType;
-                exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
-                exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
-                exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
-                exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
-                exportFile.activities[exportFile.activities.length - 1].comment = "";
-
-                continue;
-
-            } else {
-
-                // It is a buy transaction without fees (e.g. within Kernselectie).
-                // This is only for support of older transactions before June 1st 2023, since the Kernselectie is no longer without fees.
-                marker = "";
-            }
-        }
-
-        // When ISIN is given, check for Transactiekosten record.
-        // For this record the "Amount" record should be retrieved. This contains the transaction fee in local currency.
-        if (record.isin.length > 0) {
-
-            const creditMatch = description.match(/(transactiekosten)/);
-            if (creditMatch) {
-                fees = Math.abs(parseFloat(record.amount.replace(',', '.')));
-                marker = "transactiekosten";
-            }
-
-        } else {
-
-            // If ISIN is not set, the record is not relevant. 
             continue;
+          } else {
+
+            // It is a buy transaction without fees (e.g. within Kernselectie).
+            // This is only for support of older transactions before June 1st 2023, since the Kernselectie is no longer without fees.
+            marker = "";
+          }
+        } else {
+            
+          // Amount is positive, so money is received, thus it's a sell record.                    
+          orderType = GhostfolioOrderType.sell;
+
+          // For a Sale record, the preceding record should be "txfees". This means the sale had a transaction fee associated.
+          if (exportFile.activities[exportFile.activities.length - 1].comment === "txfees") {
+            exportFile.activities[exportFile.activities.length - 1].type = orderType;
+            exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
+            exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
+            exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
+            exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+            exportFile.activities[exportFile.activities.length - 1].comment = "";
+
+            continue;
+          }
         }
+      }
 
-        const date = dayjs(`${record.date} ${record.time}:00`, "DD-MM-YYYY HH:mm");
+      // When ISIN is given, check for transaction fees record.
+      // For this record the "Amount" record should be retrieved. This contains the transaction fee in local currency.
+      if (record.isin.length > 0) {
+        const creditMatch = description.match(/(en\/of)|(and\/or)|(und\/oder)/);
+        if (creditMatch) {
+          fees = Math.abs(parseFloat(record.amount.replace(",", ".")));
+          marker = "txfees";
+        }
+      } else {
+        // If ISIN is not set, the record is not relevant.
+        continue;
+      }
 
-        // Add record to export.
-        exportFile.activities.push({
-            accountId: process.env.GHOSTFOLIO_ACCOUNT_ID,
-            comment: marker,
-            fee: fees,
-            quantity: numberShares,
-            type: orderType,
-            unitPrice: unitPrice,
-            currency: "",
-            dataSource: "YAHOO",
-            date: date.format("YYYY-MM-DDTHH:mm:ssZ"),
-            symbol: tickers.items.length > 0 ? tickers.items[0].symbol : ""
-        });
+      const date = dayjs(`${record.date} ${record.time}:00`, "DD-MM-YYYY HH:mm");
+
+      // Add record to export.
+      exportFile.activities.push({
+        accountId: process.env.GHOSTFOLIO_ACCOUNT_ID,
+        comment: marker,
+        fee: fees,
+        quantity: numberShares,
+        type: orderType,
+        unitPrice: unitPrice,
+        currency: "",
+        dataSource: "YAHOO",
+        date: date.format("YYYY-MM-DDTHH:mm:ssZ"),
+        symbol: tickers.items.length > 0 ? tickers.items[0].symbol : ""
+      });
     }
 
     progress.stop();
 
     // Only export when no error has occured.
     if (!errorExport) {
+      console.log("Processing complete, writing to file..");
 
-        console.log("Processing complete, writing to file..")
+      const result = JSON.stringify(exportFile);
+      fs.writeFileSync("ghostfolio-degiro.json", result, { encoding: "utf-8" });
 
-        const result = JSON.stringify(exportFile);
-        fs.writeFileSync("ghostfolio-degiro.json", result, { encoding: "utf-8" });
-
-        console.log("Wrote data to 'ghostfolio-degiro.json'!");
+      console.log("Wrote data to 'ghostfolio-degiro.json'!");
     }
 });
