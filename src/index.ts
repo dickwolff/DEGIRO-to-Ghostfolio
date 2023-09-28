@@ -272,6 +272,12 @@ parse(
     if (!errorExport) {
       console.log("Processing complete, writing to file..");
 
+      // Ghostfolio validation doesn't allow empty order types
+      exportFile.activities = exportFile.activities.filter((a) => {
+        if (!a.type) console.warn("Skipping activity (missing order type)", a);
+        return !!a.type;
+      });
+
       const result = JSON.stringify(exportFile);
       fs.writeFileSync("ghostfolio-degiro.json", result, { encoding: "utf-8" });
 
