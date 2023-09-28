@@ -34,6 +34,8 @@ const csvHeaders = [
 // Read file contents of the CSV export.
 const csvFile = fs.readFileSync(inputFile, "utf-8");
 
+const tickerCache = {};
+
 // Parse the CSV and convert to Ghostfolio import format.
 parse(
   csvFile,
@@ -107,19 +109,25 @@ parse(
 
       // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
       const tickerUrl = `${process.env.GHOSTFOLIO_API_URL}/api/v1/symbol/lookup?query=${record.isin}`;
-      const tickerResponse = await fetch(tickerUrl, {
-        method: "GET",
-        headers: [["Authorization", `Bearer ${bearer.authToken}`]],
-      });
 
-      // Check if response was not unauthorized.
-      if (tickerResponse.status === 401) {
-        console.error("Ghostfolio access token is not valid!");
-        errorExport = true;
-        break;
+      if (!tickerCache[tickerUrl]) {
+        const tickerResponse = await fetch(tickerUrl, {
+          method: "GET",
+          headers: [["Authorization", `Bearer ${bearer.authToken}`]],
+        });
+
+        // Check if response was not unauthorized.
+        if (tickerResponse.status === 401) {
+          console.error("Ghostfolio access token is not valid!");
+          errorExport = true;
+          break;
+        }
+
+        const tickersJson = await tickerResponse.json();
+
+        tickerCache[tickerUrl] = tickersJson;
       }
-
-      const tickers = await tickerResponse.json();
+      const tickers = tickerCache[tickerUrl];
 
       let orderType: GhostfolioOrderType;
       let fees, unitPrice, numberShares;
