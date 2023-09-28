@@ -226,7 +226,9 @@ parse(
       // When ISIN is given, check for transaction fees record.
       // For this record the "Amount" record should be retrieved. This contains the transaction fee in local currency.
       if (record.isin.length > 0) {
-        const creditMatch = description.match(/(en\/of)|(and\/or)|(und\/oder)/);
+        const creditMatch = description.match(
+          /(en\/of)|(and\/or)|(e\/o)|(und\/oder)/
+        );
         if (creditMatch) {
           fees = Math.abs(parseFloat(record.amount.replace(",", ".")));
           marker = "txfees";
