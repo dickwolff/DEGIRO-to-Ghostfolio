@@ -12,6 +12,9 @@ require("dotenv").config();
 
 dayjs.extend(customParseFormat);
 
+// Local cache of earlier retrieved tickers.
+const tickerCache = {};
+
 // Define import file path.
 const inputFile = process.env.INPUT_FILE;
 
@@ -35,204 +38,234 @@ const csvFile = fs.readFileSync(inputFile, "utf-8");
 
 // Parse the CSV and convert to Ghostfolio import format.
 parse(csvFile, {
-    delimiter: ",",
-    fromLine: 2,
-    columns: csvHeaders,
-    cast: (columnValue, context) => {
+  delimiter: ",",
+  fromLine: 2,
+  columns: csvHeaders,
+  cast: (columnValue, context) => {
 
-      // Custom mapping below.
+    // Custom mapping below.
 
-      return columnValue;
+    return columnValue;
+  }
+}, async (_, records: DeGiroRecord[]) => {
+
+  let errorExport = false;
+
+  console.log(`Read CSV file ${inputFile}. Start processing..`);
+  const exportFile: GhostfolioExport = {
+    meta: {
+      date: new Date(),
+      version: "v0"
+    },
+    activities: []
+  };
+
+  // Retrieve bearer token for authentication.
+  const bearerResponse = await fetch(`${process.env.GHOSTFOLIO_API_URL}/api/v1/auth/anonymous/${process.env.GHOSTFOLIO_SECRET}`);
+  const bearer = await bearerResponse.json();
+
+  // Start progress bar.
+  const progress = new cliProgesss.SingleBar({}, cliProgesss.Presets.shades_classic);
+  progress.start(records.length - 1, 0);
+
+  for (let idx = 0; idx < records.length; idx++) {
+    const record = records[idx];
+    progress.update(idx);
+
+    const description = record.description.toLocaleLowerCase();
+
+    // Skip some records which contains one of the words below.
+    if (description === "" ||
+      description.indexOf("ideal") > -1 ||
+      description.indexOf("flatex") > -1 ||
+      description.indexOf("cash sweep") > -1 ||
+      description.indexOf("withdrawal") > -1 ||
+      description.indexOf("pass-through") > -1) {
+      continue;
     }
-  }, async (_, records: DeGiroRecord[]) => {
 
-    let errorExport = false;
+    // Skip all remaining records where:
+    // - The description does not contain the text 'dividend', and
+    // - The description does not contain an '@' (present on buy/sell records), and
+    // - The description does not contain an '/' (present on buy/sell fee records).
+    if (description.indexOf("dividend") === -1 && description.indexOf("\@") === -1 && description.indexOf("\/") === -1) {
+      continue;
+    }
 
-    console.log(`Read CSV file ${inputFile}. Start processing..`);
-    const exportFile: GhostfolioExport = {
-      meta: {
-        date: new Date(),
-        version: "v0"
-      },
-      activities: []
-    };
+    // TODO: Is is possible to add currency? So VWRL.AS is retrieved for IE00B3RBWM25 instead of VWRL.L.
+    // Maybe add yahoo-finance2 library that Ghostfolio uses, so I dont need to call Ghostfolio for this.
 
-    // Retrieve bearer token for authentication.
-    const bearerResponse = await fetch(`${process.env.GHOSTFOLIO_API_URL}/api/v1/auth/anonymous/${process.env.GHOSTFOLIO_SECRET}`);
-    const bearer = await bearerResponse.json();
+    let tickers;
+    try {
+      tickers = await getTicker(bearer.authToken, record.isin);
+    }
+    catch {
+      break;
+    }
 
-    // Start progress bar.
-    const progress = new cliProgesss.SingleBar({}, cliProgesss.Presets.shades_classic);
-    progress.start(records.length - 1, 0);
+    let orderType: GhostfolioOrderType;
+    let fees, unitPrice, numberShares;
+    fees = unitPrice = numberShares = 0;
+    let marker = "";
 
-    for (let idx = 0; idx < records.length; idx++) {
-      const record = records[idx];
-      progress.update(idx);
+    // Retrieve relevant data for a dividend record.
+    if (description.indexOf("dividend") > -1) {
 
-      const description = record.description.toLocaleLowerCase();
+      // Retrieve the amount of the record. Check wether this is negative. If so, this is a dividend tax record.
+      // Dividend tax references to the previous record. This is always a "dividend" record.
+      const amountRecord = parseFloat(record.amount.replace(",", "."));
+      if (amountRecord < 0) {
 
-      // Skip some records which contains one of the words below.
-      if (description === "" ||
-          description.indexOf("ideal") > -1 ||
-          description.indexOf("flatex") > -1 ||
-          description.indexOf("cash sweep") > -1 ||
-          description.indexOf("withdrawal") > -1 ||
-          description.indexOf("pass-through") > -1) {
+        // Retrieve the data from this record and place it on the previous processed record.
+        // This record should not be added, so it will be skipped after retrieving the required info.
+
+        // Get absolute dividend tax amount.
+        unitPrice = Math.abs(amountRecord);
+
+        // Set record values.
+        exportFile.activities[exportFile.activities.length - 1].fee = unitPrice;
+        exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+        exportFile.activities[exportFile.activities.length - 1].comment = "";
+
         continue;
       }
 
-      // Skip all remaining records where:
-      // - The description does not contain the text 'dividend', and
-      // - The description does not contain an '@' (present on buy/sell records), and
-      // - The description does not contain an '/' (present on buy/sell fee records).
-      if (description.indexOf("dividend") === -1 && description.indexOf("\@") === -1 && description.indexOf("\/") === -1) {
-        continue;
-      }
+      // This is just a normal dividend record.
+      numberShares = 1;
+      orderType = GhostfolioOrderType.dividend;
+      unitPrice = Math.abs(parseFloat(record.amount.replace(",", ".")));
+    }
 
-      // TODO: Is is possible to add currency? So VWRL.AS is retrieved for IE00B3RBWM25 instead of VWRL.L.
-      // Maybe add yahoo-finance2 library that Ghostfolio uses, so I dont need to call Ghostfolio for this.
+    // Check for a buy/sell record. This can be identified by an '@'.
+    if (description.match(/\@/)) {
 
-      // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
-      const tickerUrl = `${process.env.GHOSTFOLIO_API_URL}/api/v1/symbol/lookup?query=${record.isin}`;
-      const tickerResponse = await fetch(tickerUrl, {
-        method: "GET",
-        headers: [["Authorization", `Bearer ${bearer.authToken}`]]
-      });
+      // Get the amount of shares from the description.
+      const numberSharesFromDescription = description.match(/([\d*\.?\,?\d*]+)/)[0];
+      numberShares = parseFloat(numberSharesFromDescription);
 
-      // Check if response was not unauthorized.
-      if (tickerResponse.status === 401) {
-        console.error("Ghostfolio access token is not valid!");
-        errorExport = true;
-        break;
-      }
+      // For buy/sale records, only the total amount is recorded. So the unit price needs to be calculated.        
+      const totalAmount = parseFloat(record.amount.replace(",", "."));
+      unitPrice = parseFloat((Math.abs(totalAmount) / numberShares).toFixed(3));
 
-      const tickers = await tickerResponse.json();
+      // If amount is negative, so money has been removed, thus it's a buy record.
+      if (totalAmount < 0) {
 
-      let orderType: GhostfolioOrderType;
-      let fees, unitPrice, numberShares;
-      fees = unitPrice = numberShares = 0;
-      let marker = "";
-     
-      // Retrieve relevant data for a dividend record.
-      if (description.indexOf("dividend") > -1) {
+        orderType = GhostfolioOrderType.buy;
 
-        // Retrieve the amount of the record. Check wether this is negative. If so, this is a dividend tax record.
-         // Dividend tax references to the previous record. This is always a "dividend" record.
-        const amountRecord = parseFloat(record.amount.replace(",", "."));
-        if (amountRecord < 0) {
-                    
-            // Retrieve the data from this record and place it on the previous processed record.
-            // This record should not be added, so it will be skipped after retrieving the required info.
+        // For a Buy record, the preceding record should be "txfees". This means the buy had a transaction fee associated.
+        if (exportFile.activities[exportFile.activities.length - 1].comment === "txfees") {
 
-            // Get absolute dividend tax amount.
-            unitPrice = Math.abs(amountRecord);
+          // Set the buy transaction data.
+          exportFile.activities[exportFile.activities.length - 1].type = orderType;
+          exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
+          exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
+          exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
+          exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+          exportFile.activities[exportFile.activities.length - 1].comment = "";
 
-            // Set record values.
-            exportFile.activities[exportFile.activities.length - 1].fee = unitPrice;
-            exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
-            exportFile.activities[exportFile.activities.length - 1].comment = "";
-
-            continue;
-        }
-
-        // This is just a normal dividend record.
-        numberShares = 1;
-        orderType = GhostfolioOrderType.dividend;
-        unitPrice = Math.abs(parseFloat(record.amount.replace(",", ".")));
-      }
-
-      // Check for a buy/sell record. This can be identified by an '@'.
-      if (description.match(/\@/)) {
-        
-        // Get the amount of shares from the description.
-        const numberSharesFromDescription = description.match(/([\d*\.?\,?\d*]+)/)[0];
-        numberShares = parseFloat(numberSharesFromDescription);
-
-        // For buy/sale records, only the total amount is recorded. So the unit price needs to be calculated.        
-        const totalAmount = parseFloat(record.amount.replace(",", "."));
-        unitPrice = parseFloat((Math.abs(totalAmount) / numberShares).toFixed(3));
-
-        // If amount is negative, so money has been removed, thus it's a buy record.
-        if (totalAmount < 0) {
-
-          orderType = GhostfolioOrderType.buy;
-
-          // For a Buy record, the preceding record should be "txfees". This means the buy had a transaction fee associated.
-          if (exportFile.activities[exportFile.activities.length - 1].comment === "txfees") {
-
-            // Set the buy transaction data.
-            exportFile.activities[exportFile.activities.length - 1].type = orderType;
-            exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
-            exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
-            exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
-            exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
-            exportFile.activities[exportFile.activities.length - 1].comment = "";
-
-            continue;
-          } else {
-
-            // It is a buy transaction without fees (e.g. within Kernselectie).
-            // This is only for support of older transactions before June 1st 2023, since the Kernselectie is no longer without fees.
-            marker = "";
-          }
+          continue;
         } else {
-            
-          // Amount is positive, so money is received, thus it's a sell record.                    
-          orderType = GhostfolioOrderType.sell;
 
-          // For a Sale record, the preceding record should be "txfees". This means the sale had a transaction fee associated.
-          if (exportFile.activities[exportFile.activities.length - 1].comment === "txfees") {
-            exportFile.activities[exportFile.activities.length - 1].type = orderType;
-            exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
-            exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
-            exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
-            exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
-            exportFile.activities[exportFile.activities.length - 1].comment = "";
-
-            continue;
-          }
-        }
-      }
-
-      // When ISIN is given, check for transaction fees record.
-      // For this record the "Amount" record should be retrieved. This contains the transaction fee in local currency.
-      if (record.isin.length > 0) {
-        const creditMatch = description.match(/(en\/of)|(and\/or)|(und\/oder)/);
-        if (creditMatch) {
-          fees = Math.abs(parseFloat(record.amount.replace(",", ".")));
-          marker = "txfees";
+          // It is a buy transaction without fees (e.g. within Kernselectie).
+          // This is only for support of older transactions before June 1st 2023, since the Kernselectie is no longer without fees.
+          marker = "";
         }
       } else {
-        // If ISIN is not set, the record is not relevant.
-        continue;
+
+        // Amount is positive, so money is received, thus it's a sell record.                    
+        orderType = GhostfolioOrderType.sell;
+
+        // For a Sale record, the preceding record should be "txfees". This means the sale had a transaction fee associated.
+        if (exportFile.activities[exportFile.activities.length - 1].comment === "txfees") {
+          exportFile.activities[exportFile.activities.length - 1].type = orderType;
+          exportFile.activities[exportFile.activities.length - 1].symbol = tickers.items[0].symbol;
+          exportFile.activities[exportFile.activities.length - 1].quantity = numberShares;
+          exportFile.activities[exportFile.activities.length - 1].unitPrice = unitPrice;
+          exportFile.activities[exportFile.activities.length - 1].currency = record.currency;
+          exportFile.activities[exportFile.activities.length - 1].comment = "";
+
+          continue;
+        }
       }
-
-      const date = dayjs(`${record.date} ${record.time}:00`, "DD-MM-YYYY HH:mm");
-
-      // Add record to export.
-      exportFile.activities.push({
-        accountId: process.env.GHOSTFOLIO_ACCOUNT_ID,
-        comment: marker,
-        fee: fees,
-        quantity: numberShares,
-        type: orderType,
-        unitPrice: unitPrice,
-        currency: record.currency,
-        dataSource: "YAHOO",
-        date: date.format("YYYY-MM-DDTHH:mm:ssZ"),
-        symbol: tickers.items.length > 0 ? tickers.items[0].symbol : ""
-      });
     }
 
-    progress.stop();
-
-    // Only export when no error has occured.
-    if (!errorExport) {
-      console.log("Processing complete, writing to file..");
-
-      const result = JSON.stringify(exportFile);
-      fs.writeFileSync("ghostfolio-degiro.json", result, { encoding: "utf-8" });
-
-      console.log("Wrote data to 'ghostfolio-degiro.json'!");
+    // Ghostfolio validation doesn't allow empty order types.
+    if (!orderType) {
+      continue;
     }
+
+    // When ISIN is given, check for transaction fees record.
+    // For this record the "Amount" record should be retrieved. This contains the transaction fee in local currency.
+    if (record.isin.length > 0) {
+      const creditMatch = description.match(/(en\/of)|(and\/or)|(und\/oder)|(e\/o)/);
+      if (creditMatch) {
+        fees = Math.abs(parseFloat(record.amount.replace(",", ".")));
+        marker = "txfees";
+      }
+    } else {
+      // If ISIN is not set, the record is not relevant.
+      continue;
+    }
+
+    const date = dayjs(`${record.date} ${record.time}:00`, "DD-MM-YYYY HH:mm");
+
+    // Add record to export.
+    exportFile.activities.push({
+      accountId: process.env.GHOSTFOLIO_ACCOUNT_ID,
+      comment: marker,
+      fee: fees,
+      quantity: numberShares,
+      type: orderType,
+      unitPrice: unitPrice,
+      currency: record.currency,
+      dataSource: "YAHOO",
+      date: date.format("YYYY-MM-DDTHH:mm:ssZ"),
+      symbol: tickers.length > 0 ? tickers[0].symbol : ""
+    });
+  }
+
+  progress.stop();
+
+  // Only export when no error has occured.
+  if (!errorExport) {
+    console.log("Processing complete, writing to file..");
+
+    const result = JSON.stringify(exportFile);
+    fs.writeFileSync("ghostfolio-degiro.json", result, { encoding: "utf-8" });
+
+    console.log("Wrote data to 'ghostfolio-degiro.json'!");
+  }
 });
+
+/**
+ * 
+ * @param authToken The bearer token for Ghostfolio API access.
+ * @param isin The security identification
+ * @returns Tickers, if any found.
+ */
+async function getTicker(authToken, isin): Promise<any> {
+
+  // If the ticker is not known, retrieve the data for the first time.
+  if (!tickerCache[isin]) {
+
+    // Retrieve YAHOO Finance ticker that corresponds to the ISIN from DEGIRO record.
+    const tickerUrl = `${process.env.GHOSTFOLIO_API_URL}/api/v1/symbol/lookup?query=${isin}`;
+
+    const tickerResponse = await fetch(tickerUrl, {
+      method: "GET",
+      headers: [["Authorization", `Bearer ${authToken}`]]
+    });
+
+    // Check if response was not unauthorized.
+    if (tickerResponse.status === 401) {
+      console.error("Ghostfolio access token is not valid!");
+      throw new Error("Ghostfolio access token is not valid!");
+    }
+
+    // Store result in cache.
+    const tickers = await tickerResponse.json();
+    tickerCache[isin] = tickers.items;
+  }
+
+  return tickerCache[isin];
+}
